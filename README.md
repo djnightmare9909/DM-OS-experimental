@@ -14,8 +14,11 @@ At the heart of DM OS is a silent, internal process called **The Chronicler**. T
 *   **Progress Clocks:** Long-term events, like an impending invasion or a spreading plague, are tracked on conceptual timers. Your actions—or inactions—can advance or halt these clocks, dynamically shaping the world's future.
 *   **Reactive Environments:** The world remembers. A goblin patrol you eliminate won't just disappear; their war camp will be on high alert when you arrive. News of your deeds, good or ill, will spread, changing how different communities react to you.
 
-### 2. Procedurally Generated Worlds
-Before your adventure begins, the AI Chronicler procedurally generates a unique world map for you to explore, complete with rooms, corridors, and features based on your chosen themes. Experience the thrill of entering a world built just for your story, and visualize it in the 3D "World View."
+### 2. The Dungeon Delver: An Endless, Visual Adventure
+Experience a unique, first-person dungeon crawl where the world is built around you in real-time.
+*   **Procedurally Generated Worlds:** Before your adventure begins, the AI Chronicler generates a unique starting dungeon.
+*   **Infinite Exploration:** Dungeons now contain shimmering voids. Step into one, and a brand new, unique area will be generated, creating a potentially endless adventure.
+*   **Visible Enemies & Action Combat:** See your foes as sprites in the 3D world. Approach them and press the **'A' key** to attack, instantly initiating a turn-based D&D combat in the text console, complete with visual feedback for your attacks.
 
 ### 3. Deeply Simulated NPCs with Persistent Memory
 NPCs in DM OS are more than just quest-givers; they are simulated people with unique histories, beliefs, and memories.

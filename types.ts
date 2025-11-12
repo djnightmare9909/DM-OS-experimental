@@ -65,10 +65,24 @@ export interface NPCState {
     relationship: string;
 }
 
+export interface WorldEnemy {
+  id: string;
+  type: string;
+  x: number;
+  y: number;
+}
+
+export interface WorldExit {
+    x: number;
+    y: number;
+}
+
 export interface WorldData {
   map: number[][];
   playerStart: { x: number; y: number };
   worldDescription: string;
+  enemies: WorldEnemy[];
+  exits: WorldExit[];
 }
 
 export interface ChatSession {
@@ -87,7 +101,7 @@ export interface ChatSession {
   achievements?: Achievement[];
   settings?: GameSettings;
   worldData?: WorldData;
-  // Fix: Add missing properties to support game setup flow.
+  inCombat?: boolean;
   creationPhase?: 'guided' | 'character_creation' | 'narrator_selection' | 'world_creation' | 'quick_start_selection' | 'quick_start_password' | false;
   quickStartChars?: CharacterSheetData[];
 }

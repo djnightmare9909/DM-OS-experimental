@@ -142,14 +142,13 @@ import {
   ai,
   createNewChatInstance,
   dmPersonas,
+  getDungeonGenerationPrompt,
   getNewGameSetupInstruction,
-  getNewWorldGenerationPrompt,
   getQuickStartCharacterPrompt,
   getTelemetryInstruction,
   worldGenerationSchema,
 } from './gemini';
-// Fix: import UISettings type
-import type { Message, ChatSession, UISettings, GameSettings } from './types';
+import type { Message, ChatSession, UISettings, GameSettings, WorldEnemy } from './types';
 
 let telemetryChat: Chat | null = null;
 let chatIdToRename: string | null = null;
@@ -158,9 +157,10 @@ let chatIdToDelete: string | null = null;
 // --- Game Engine State ---
 let engineActive = false;
 let gameLoopId: number | null = null;
-let player = { x: 5.5, y: 5.5, dir: 0, rot: 0, speed: 0 };
+let player = { x: 5.5, y: 5.5, dir: 0, rot: 0, speed: 0, planeX: 0, planeY: 0.66 };
 const keys: { [key: string]: boolean } = { ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false };
 let gameMap: number[][] = [];
+let animationState: { type: 'player-attack' | 'enemy-hit' | null, duration: number } = { type: null, duration: 0 };
 
 const quickStartCharacterSchema = {
   type: Type.OBJECT,
@@ -459,17 +459,11 @@ async function deleteChat() {
 /**
  * Generates a new world map and description using the AI.
  * @param session The current chat session.
+ * @param prompt The generation prompt.
  */
-async function generateWorld(session: ChatSession) {
+async function generateWorld(session: ChatSession, prompt: string) {
     showWorldGenOverlay();
     try {
-        const themes = `Tone: ${session.settings?.tone}, Narration: ${session.settings?.narration}`;
-        let charInfo = 'A new adventurer.';
-        if (typeof session.characterSheet === 'object' && session.characterSheet.name) {
-            charInfo = `${session.characterSheet.name}, the ${session.characterSheet.race} ${session.characterSheet.class}.`;
-        }
-
-        const prompt = getNewWorldGenerationPrompt(themes, charInfo);
         const response = await ai.models.generateContent({
             model: 'gemini-2.5-flash',
             contents: prompt,
@@ -495,7 +489,7 @@ async function generateWorld(session: ChatSession) {
                 [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
                 [1, 0, 1, 0, 2, 1, 1, 0, 0, 1],
                 [1, 0, 1, 0, 0, 0, 1, 0, 0, 1],
-                [1, 0, 1, 0, 0, 0, 1, 0, 0, 1],
+                [1, 0, 1, 3, 0, 0, 1, 0, 0, 1],
                 [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
                 [1, 0, 0, 0, 1, 1, 1, 1, 0, 1],
                 [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
@@ -503,7 +497,9 @@ async function generateWorld(session: ChatSession) {
                 [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
             ],
             playerStart: { x: 5.5, y: 5.5 },
-            worldDescription: "The Chronicler's vision faltered, but a small, stone room materializes around you from the ether. The air is still and silent."
+            worldDescription: "The Chronicler's vision faltered, but a small, stone room materializes around you from the ether. The air is still and silent.",
+            enemies: [],
+            exits: [{x: 4, y: 3}]
         };
         const errorMessage: Message = { sender: 'error', text: "The world failed to generate correctly. A default starting area has been created." };
         session.messages.push(errorMessage);
@@ -526,7 +522,13 @@ async function finalizeSetupAndStartGame(session: ChatSession, title: string, fi
     session.messages.push(finalSetupMessage);
   }
 
-  await generateWorld(session);
+  const themes = `Tone: ${session.settings?.tone}, Narration: ${session.settings?.narration}`;
+  let charInfo = 'A new adventurer.';
+  if (typeof session.characterSheet === 'object' && session.characterSheet.name) {
+      charInfo = `${session.characterSheet.name}, the ${session.characterSheet.race} ${session.characterSheet.class}.`;
+  }
+  const prompt = getDungeonGenerationPrompt(themes, charInfo, false);
+  await generateWorld(session, prompt);
 
   saveChatHistoryToDB();
   renderChatHistory();
@@ -806,6 +808,10 @@ async function handleFormSubmit(e: Event) {
     }
     stopTTS();
 
+    if (userInput.toLowerCase().startsWith("i attack")) {
+        animationState = { type: 'player-attack', duration: 30 };
+    }
+
     const userMessage: Message = { sender: 'user', text: userInput };
     currentSession.messages.push(userMessage);
     appendMessage(userMessage);
@@ -841,17 +847,29 @@ async function handleFormSubmit(e: Event) {
       // Handle Combat Tracker
       const combatStatusRegex = /\[COMBAT_STATUS:\s*({.*?})\]/;
       const match = responseText.match(combatStatusRegex);
+      let combatData;
       if (match && match[1]) {
         try {
-          const combatData = JSON.parse(match[1]);
+          combatData = JSON.parse(match[1]);
           updateCombatTracker(combatData.enemies);
+          // If all enemies are defeated, end combat mode
+          if (combatData.enemies.length === 0) {
+              currentSession.inCombat = false;
+          }
         } catch (jsonError) {
           console.error("Failed to parse combat status JSON:", jsonError);
           combatTracker.classList.add('hidden');
+          currentSession.inCombat = false;
         }
       } else {
         combatTracker.classList.add('hidden');
+        currentSession.inCombat = false;
       }
+
+      if (userInput.toLowerCase().startsWith("i attack") && combatData?.enemies?.length > 0) {
+        animationState = { type: 'enemy-hit', duration: 15 };
+      }
+
 
       const finalMessage: Message = { sender: 'model', text: responseText.replace(combatStatusRegex, '').trim() };
       currentSession.messages.push(finalMessage);
@@ -968,7 +986,6 @@ function setupEventListeners() {
   let setupSettings: Partial<GameSettings & { personaId: string }> = {};
   
   chatForm.addEventListener('submit', handleFormSubmit);
-  // Fix: Cannot find name 'sendButton'.
   sendButton.addEventListener('click', (e) => handleFormSubmit(e));
 
   chatInput.addEventListener('focus', () => {
@@ -1237,7 +1254,6 @@ function setupEventListeners() {
     const button = (e.target as HTMLElement).closest('button');
     if (button?.dataset.size) {
         getUISettings().fontSize = button.dataset.size as 'small' | 'medium' | 'large';
-        // Fix: Cannot find name 'dbSet'.
         dbSet('dm-os-ui-settings', getUISettings());
         applyUISettings();
     }
@@ -1261,7 +1277,6 @@ function setupEventListeners() {
     }
   });
 
-  // Fix: Cannot find name 'clearDiceResults'.
   clearResultsBtn.addEventListener('click', clearDiceResults);
   diceGrid.addEventListener('click', (e) => {
     const target = e.target as HTMLElement;
@@ -1286,7 +1301,6 @@ function setupEventListeners() {
   closeInventoryBtn.addEventListener('click', () => inventoryPopup.classList.remove('visible'));
   refreshInventoryBtn.addEventListener('click', fetchAndRenderInventoryPopup);
   
-  // Fix: Cannot find name 'quickActionsBar'.
   quickActionsBar.addEventListener('click', (e) => {
       const button = (e.target as HTMLElement).closest<HTMLButtonElement>('.quick-action-btn');
       if (button?.dataset.command) {
@@ -1295,7 +1309,6 @@ function setupEventListeners() {
       }
   });
 
-  // Fix: Cannot find name 'inventoryPopupContent'.
   inventoryPopupContent.addEventListener('click', (e) => {
       const button = (e.target as HTMLElement).closest<HTMLButtonElement>('.use-item-btn');
       if (button?.dataset.itemName) {
@@ -1322,11 +1335,8 @@ async function initApp() {
   await initDB();
 
   const [themeId, savedUiSettings, savedPersonaId] = await Promise.all([
-    // Fix: Cannot find name 'dbGet'.
     dbGet<string>('dm-os-theme'),
-    // Fix: Cannot find name 'dbGet' and 'UISettings'.
     dbGet<UISettings>('dm-os-ui-settings'),
-    // Fix: Cannot find name 'dbGet'.
     dbGet<string>('dm-os-persona'),
     loadChatHistoryFromDB(),
     loadUserContextFromDB(),
@@ -1343,11 +1353,8 @@ async function initApp() {
     setCurrentPersonaId(savedPersonaId);
   }
 
-  // Fix: Cannot find name 'renderDiceGrid'.
   renderDiceGrid();
-  // Fix: Cannot find name 'renderThemeCards'.
   renderThemeCards();
-  // Fix: Cannot find name 'renderUserContext' and it needs an argument.
   renderUserContext(getUserContext());
   renderChatHistory();
 
@@ -1392,7 +1399,6 @@ async function handleWorldCreationSubmit(e: Event) {
  * @param charDetails The basic character details from the creation form.
  */
 async function startDungeonDelverMode(charDetails: { name: string; race: string; class: string }) {
-    showWorldGenOverlay();
     
     // Create a hidden user message to start the history, ensuring it's valid.
     const kickoffMessage: Message = {
@@ -1432,16 +1438,17 @@ async function startDungeonDelverMode(charDetails: { name: string; race: string;
     telemetryChat = createNewChatInstance([], telemetryInstruction);
 
     getChatHistory().push(newSession);
-    
-    await generateWorld(newSession);
+
+    const themes = `Tone: ${newSession.settings?.tone}, Narration: ${newSession.settings?.narration}`;
+    const charInfo = `${charDetails.name}, the ${charDetails.race} ${charDetails.class}.`;
+    const prompt = getDungeonGenerationPrompt(themes, charInfo, false);
+    await generateWorld(newSession, prompt);
     
     saveChatHistoryToDB();
     renderChatHistory();
     loadChat(newId);
     
     handleEngineToggle();
-
-    hideWorldGenOverlay();
 }
 
 
@@ -1476,11 +1483,46 @@ function handleEngineToggle() {
     }
 }
 
+/**
+ * Generates the next chunk of the dungeon when a player enters an exit portal.
+ */
+async function generateNextChunk() {
+    const session = getCurrentChat();
+    if (!session || isSending()) return;
+    setSending(true);
+
+    // Provide a description of where the player is coming from.
+    const exitDescription = "a shimmering, dark portal in a stone corridor";
+    
+    const themes = `Tone: ${session.settings?.tone}, Narration: ${session.settings?.narration}`;
+    let charInfo = 'An adventurer.';
+    if (typeof session.characterSheet === 'object' && session.characterSheet.name) {
+        charInfo = `${session.characterSheet.name}, the ${session.characterSheet.race} ${session.characterSheet.class}.`;
+    }
+    const prompt = getDungeonGenerationPrompt(themes, charInfo, true, exitDescription);
+    
+    await generateWorld(session, prompt);
+
+    // Update game engine state with new world data
+    gameMap = session.worldData!.map;
+    player.x = session.worldData!.playerStart.x;
+    player.y = session.worldData!.playerStart.y;
+
+    saveChatHistoryToDB();
+    renderMessages(session.messages);
+
+    setSending(false);
+}
+
+
 function setupEngineListeners() {
     document.addEventListener('keydown', (e) => {
         if (keys.hasOwnProperty(e.key)) {
             e.preventDefault();
             keys[e.key] = true;
+        }
+        if (e.key.toLowerCase() === 'a' && engineActive) {
+            handleAttackKeyPress();
         }
     });
     document.addEventListener('keyup', (e) => {
@@ -1490,6 +1532,33 @@ function setupEngineListeners() {
         }
     });
 }
+
+function handleAttackKeyPress() {
+    const session = getCurrentChat();
+    if (!session || !session.worldData || session.inCombat) return;
+
+    let closestEnemy: WorldEnemy | null = null;
+    let closestDist = 2; // Max attack distance
+
+    for (const enemy of session.worldData.enemies) {
+        const dist = Math.sqrt((player.x - enemy.x)**2 + (player.y - enemy.y)**2);
+        if (dist < closestDist) {
+            closestDist = dist;
+            closestEnemy = enemy;
+        }
+    }
+
+    if (closestEnemy) {
+        session.inCombat = true;
+        // Remove enemy from world so it's no longer rendered
+        session.worldData.enemies = session.worldData.enemies.filter(e => e.id !== closestEnemy!.id);
+        
+        // Trigger combat in text console
+        chatInput.value = `I attack the ${closestEnemy.type}.`;
+        chatForm.requestSubmit();
+    }
+}
+
 
 function getDirectionString(rad: number): string {
     rad = (rad % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
@@ -1509,54 +1578,68 @@ function getTerrainType(x: number, y: number): string {
     switch (tile) {
         case 1: return "STONE_WALL";
         case 2: return "DOOR";
+        case 3: return "VOID";
         default: return "STONE_FLOOR";
     }
 }
 
 function gameLoop() {
+    const session = getCurrentChat();
+    const inCombat = session?.inCombat ?? false;
+    
     // --- Movement ---
-    const moveSpeed = 0.05;
-    const rotSpeed = 0.04;
-    const oldX = player.x;
-    const oldY = player.y;
+    if (!inCombat) {
+        const moveSpeed = 0.05;
+        const rotSpeed = 0.04;
+        const oldX = player.x;
+        const oldY = player.y;
 
-    if (keys.ArrowUp) {
-        player.x += Math.cos(player.dir) * moveSpeed;
-        player.y += Math.sin(player.dir) * moveSpeed;
-    }
-    if (keys.ArrowDown) {
-        player.x -= Math.cos(player.dir) * moveSpeed;
-        player.y -= Math.sin(player.dir) * moveSpeed;
-    }
-    if (keys.ArrowRight) {
-        player.dir += rotSpeed;
-    }
-    if (keys.ArrowLeft) {
-        player.dir -= rotSpeed;
-    }
+        let telemetryAction: 'MOVE' | 'TURN' | null = null;
 
-    // --- Collision ---
-    if (gameMap[Math.floor(player.y)][Math.floor(player.x)] === 1) { // Only collide with walls
-        player.x = oldX;
-        player.y = oldY;
-    }
+        if (keys.ArrowUp) {
+            player.x += Math.cos(player.dir) * moveSpeed;
+            player.y += Math.sin(player.dir) * moveSpeed;
+            telemetryAction = 'MOVE';
+        }
+        if (keys.ArrowDown) {
+            player.x -= Math.cos(player.dir) * moveSpeed;
+            player.y -= Math.sin(player.dir) * moveSpeed;
+            telemetryAction = 'MOVE';
+        }
+        if (keys.ArrowRight) {
+            player.dir += rotSpeed;
+            telemetryAction = telemetryAction || 'TURN';
+        }
+        if (keys.ArrowLeft) {
+            player.dir -= rotSpeed;
+            telemetryAction = telemetryAction || 'TURN';
+        }
 
-    // --- Telemetry ---
-    const positionChanged = Math.floor(player.x) !== Math.floor(oldX) || Math.floor(player.y) !== Math.floor(oldY);
-    // A simple way to check for significant rotation without spamming on every tiny change
-    const significantRotation = Math.abs(player.dir - player.rot) > 0.5; // about 30 degrees
-
-    if ((positionChanged || significantRotation) && !isSending()) {
-        player.rot = player.dir; // Update the last known rotation
+        const currentTile = gameMap[Math.floor(player.y)]?.[Math.floor(player.x)];
         
-        const directionStr = getDirectionString(player.dir);
-        const terrainStr = getTerrainType(player.x, player.y);
-        
-        const telemetry = `[MOVE EVENT: { from: {x: ${Math.floor(oldX)}, y: ${Math.floor(oldY)}}, to: {x: ${Math.floor(player.x)}, y: ${Math.floor(player.y)}}, direction: "${directionStr}", terrain: "${terrainStr}" }]`;
-        
-        handleTelemetry(telemetry);
-    }
+        // --- Collision & Level Transition ---
+        if (currentTile === 1) { // Wall
+            player.x = oldX;
+            player.y = oldY;
+        } else if (currentTile === 3) { // Exit Portal
+            generateNextChunk();
+            // Stop further processing this frame as the world is changing
+            gameLoopId = requestAnimationFrame(gameLoop);
+            return;
+        }
 
+
+        // --- Telemetry ---
+        if (telemetryAction && !isSending()) {
+            const directionStr = getDirectionString(player.dir);
+            const fromTerrain = getTerrainType(oldX, oldY);
+            const toTerrain = getTerrainType(player.x, player.y);
+            const facingObstacle = getTerrainType(player.x + Math.cos(player.dir) * 0.6, player.y + Math.sin(player.dir) * 0.6);
+
+            const telemetry = `[TELEMETRY: { action: "${telemetryAction}", from: "${fromTerrain}", to: "${toTerrain}", direction: "${directionStr}", obstacle: "${facingObstacle}" }]`;
+            handleTelemetry(telemetry);
+        }
+    }
 
     // --- Drawing ---
     const ctx = gameViewport.getContext('2d');
@@ -1565,22 +1648,24 @@ function gameLoop() {
     const W = gameViewport.width = window.innerWidth;
     const H = gameViewport.height = window.innerHeight / 2;
     
-    // Ceiling and Floor with more distinct colors for better depth perception.
-    ctx.fillStyle = '#2a2a3a'; // Dark, moody blue/grey ceiling
+    // Ceiling and Floor
+    ctx.fillStyle = '#2a2a3a';
     ctx.fillRect(0, 0, W, H / 2);
-    ctx.fillStyle = '#5a4a3a'; // Brownish/earthy floor
+    ctx.fillStyle = '#5a4a3a';
     ctx.fillRect(0, H/2, W, H / 2);
 
     const FOV = Math.PI / 3;
-    const FOG_COLOR = { r: 42, g: 42, b: 58 }; // Corresponds to ceiling color #2a2a3a
+    const FOG_COLOR = { r: 42, g: 42, b: 58 };
+    const zBuffer = new Array(W);
     
+    // --- Wall Casting ---
     for (let i = 0; i < W; i++) {
         const rayAngle = (player.dir - FOV / 2) + (i / W) * FOV;
         
         let distanceToWall = 0;
         let hitWall = false;
         let wallType = 0;
-        let side = 0; // 0 for N/S walls, 1 for E/W walls
+        let side = 0;
 
         const eyeX = Math.cos(rayAngle);
         const eyeY = Math.sin(rayAngle);
@@ -1598,37 +1683,29 @@ function gameLoop() {
                 if (mapTile !== 0) {
                     hitWall = true;
                     wallType = mapTile;
-                    
-                    // Side detection: check if the ray just crossed a vertical or horizontal grid line.
                     const prevX = Math.floor(player.x + eyeX * (distanceToWall - 0.1));
-                    if (testX !== prevX) {
-                        side = 1; // E/W wall
-                    } else {
-                        side = 0; // N/S wall
-                    }
+                    side = (testX !== prevX) ? 1 : 0;
                 }
             }
         }
         
-        // Correct for fisheye lens effect to make walls appear straight.
         const ca = player.dir - rayAngle;
         distanceToWall *= Math.cos(ca);
+        zBuffer[i] = distanceToWall; // Store distance for sprite depth testing
 
         const ceiling = H / 2 - H / distanceToWall;
         const floor = H - ceiling;
         
-        // Define base colors and apply different shades for N/S vs E/W walls for a pseudo-lighting effect.
         let wallColorRgb;
         if (wallType === 2) { // Door
-            wallColorRgb = side === 1 ? { r: 110, g: 53, b: 13 } : { r: 139, g: 69, b: 19 }; // Darker brown vs original #8B4513
+            wallColorRgb = side === 1 ? { r: 110, g: 53, b: 13 } : { r: 139, g: 69, b: 19 };
+        } else if (wallType === 3) { // Void portal
+            wallColorRgb = {r: 20, g: 0, b: 30};
         } else { // Wall
-            wallColorRgb = side === 1 ? { r: 128, g: 128, b: 128 } : { r: 160, g: 160, b: 160 }; // #808080 (darker) vs #a0a0a0 (lighter)
+            wallColorRgb = side === 1 ? { r: 128, g: 128, b: 128 } : { r: 160, g: 160, b: 160 };
         }
         
-        // Calculate fog factor. Starts after 1 unit, maxes out at 12 units.
         const fogFactor = Math.max(0, Math.min(1, (distanceToWall - 1) / 11));
-
-        // Apply fog by interpolating between wall color and the ceiling color.
         const r = wallColorRgb.r * (1 - fogFactor) + FOG_COLOR.r * fogFactor;
         const g = wallColorRgb.g * (1 - fogFactor) + FOG_COLOR.g * fogFactor;
         const b = wallColorRgb.b * (1 - fogFactor) + FOG_COLOR.b * fogFactor;
@@ -1636,7 +1713,74 @@ function gameLoop() {
         ctx.fillStyle = `rgb(${Math.floor(r)}, ${Math.floor(g)}, ${Math.floor(b)})`;
         ctx.fillRect(i, ceiling, 1, floor - ceiling);
     }
+
+    // --- Sprite Casting ---
+    const enemies = session?.worldData?.enemies || [];
+    enemies.sort((a, b) => ((player.x - b.x)**2 + (player.y - b.y)**2) - ((player.x - a.x)**2 + (player.y - a.y)**2));
+
+    for(const enemy of enemies) {
+        const spriteX = enemy.x - player.x;
+        const spriteY = enemy.y - player.y;
+
+        const invDet = 1.0 / (player.planeX * Math.sin(player.dir) - Math.cos(player.dir) * player.planeY);
+        const transformX = invDet * (Math.sin(player.dir) * spriteX - Math.cos(player.dir) * spriteY);
+        const transformY = invDet * (-player.planeY * spriteX + player.planeX * spriteY);
+
+        if (transformY > 0.5) { // Is sprite in front of player?
+            const spriteScreenX = Math.floor((W / 2) * (1 + transformX / transformY));
+            const spriteHeight = Math.abs(Math.floor(H / transformY));
+            const spriteWidth = spriteHeight;
+
+            const drawStartY = Math.floor(-spriteHeight / 2 + H / 2);
+            const drawStartX = Math.floor(-spriteWidth / 2 + spriteScreenX);
+            
+            // Simple goblin sprite
+            const headRadius = spriteWidth * 0.2;
+            const bodyHeight = spriteHeight * 0.4;
+            const bodyWidth = spriteWidth * 0.3;
+            
+            const fogFactor = Math.max(0, Math.min(1, (transformY - 1) / 11));
+            const baseR = 34, baseG = 139, baseB = 34; // ForestGreen
+            const r = baseR * (1 - fogFactor) + FOG_COLOR.r * fogFactor;
+            const g = baseG * (1 - fogFactor) + FOG_COLOR.g * fogFactor;
+            const b = baseB * (1 - fogFactor) + FOG_COLOR.b * fogFactor;
+
+            ctx.fillStyle = `rgb(${Math.floor(r)}, ${Math.floor(g)}, ${Math.floor(b)})`;
+
+            // Check against zBuffer before drawing
+            if (spriteScreenX > 0 && spriteScreenX < W && transformY < zBuffer[spriteScreenX]) {
+                // Body
+                ctx.fillRect(drawStartX + spriteWidth / 2 - bodyWidth / 2, drawStartY + spriteHeight*0.3, bodyWidth, bodyHeight);
+                // Head
+                ctx.beginPath();
+                ctx.arc(drawStartX + spriteWidth/2, drawStartY + spriteHeight * 0.3, headRadius, 0, 2*Math.PI);
+                ctx.fill();
+            }
+        }
+    }
     
+    // --- Animation Overlay ---
+    if (animationState.duration > 0) {
+        if (animationState.type === 'player-attack') {
+            const progress = 1 - (animationState.duration / 30);
+            ctx.beginPath();
+            ctx.moveTo(W * 0.2, H * 0.8);
+            ctx.quadraticCurveTo(W * 0.5, H * (0.8 - progress * 0.6), W * 0.8, H * 0.8);
+            ctx.strokeStyle = `rgba(255, 255, 255, ${1 - progress})`;
+            ctx.lineWidth = 5 - (progress * 4);
+            ctx.stroke();
+        } else if (animationState.type === 'enemy-hit') {
+            const progress = 1 - (animationState.duration / 15);
+            ctx.fillStyle = `rgba(255, 0, 0, ${0.4 * (1 - progress)})`;
+            ctx.fillRect(0, 0, W, H);
+        }
+        animationState.duration--;
+        if (animationState.duration <= 0) {
+            animationState.type = null;
+        }
+    }
+
+
     gameLoopId = requestAnimationFrame(gameLoop);
 }
 
