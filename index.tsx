@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 // Fix: Improved the 'generateContent' call for creating quick start characters by adding a 'responseSchema' to ensure valid JSON output.
-import { Type } from '@google/genai';
+import { Type, Chat } from '@google/genai';
 import {
   initDB,
   loadChatHistoryFromDB,
@@ -111,6 +111,13 @@ import {
   appendFileProcessingMessage,
   contextManager,
   contextHeader,
+  enterDungeonDelverBtn,
+  gameViewport,
+  showWorldGenOverlay,
+  hideWorldGenOverlay,
+  worldCreationView,
+  worldCreationForm,
+  cancelWorldCreationBtn,
 } from './ui';
 import {
   stopTTS,
@@ -136,13 +143,24 @@ import {
   createNewChatInstance,
   dmPersonas,
   getNewGameSetupInstruction,
+  getNewWorldGenerationPrompt,
   getQuickStartCharacterPrompt,
+  getTelemetryInstruction,
+  worldGenerationSchema,
 } from './gemini';
 // Fix: import UISettings type
 import type { Message, ChatSession, UISettings, GameSettings } from './types';
 
+let telemetryChat: Chat | null = null;
 let chatIdToRename: string | null = null;
 let chatIdToDelete: string | null = null;
+
+// --- Game Engine State ---
+let engineActive = false;
+let gameLoopId: number | null = null;
+let player = { x: 5.5, y: 5.5, dir: 0, rot: 0, speed: 0 };
+const keys: { [key: string]: boolean } = { ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false };
+let gameMap: number[][] = [];
 
 const quickStartCharacterSchema = {
   type: Type.OBJECT,
@@ -243,6 +261,16 @@ function showWelcomeModalIfNeeded() {
  * Starts a brand new chat session, guiding the user through the setup process.
  */
 async function startNewChat() {
+  if (telemetryChat) {
+    telemetryChat = null;
+  }
+  if (gameLoopId) {
+      cancelAnimationFrame(gameLoopId);
+      gameLoopId = null;
+  }
+  engineActive = false;
+  document.body.classList.remove('engine-active');
+
   stopTTS();
   closeSidebar();
   chatContainer.innerHTML = ''; // Clear the view immediately
@@ -307,6 +335,16 @@ function loadChat(id: string) {
   if (currentChatId === id && !document.body.classList.contains('sidebar-open')) {
     return;
   }
+  if (telemetryChat) {
+    telemetryChat = null;
+  }
+  if (gameLoopId) {
+      cancelAnimationFrame(gameLoopId);
+      gameLoopId = null;
+  }
+  engineActive = false;
+  document.body.classList.remove('engine-active');
+
   stopTTS();
   const session = getChatHistory().find(s => s.id === id);
   if (session) {
@@ -419,6 +457,62 @@ async function deleteChat() {
 }
 
 /**
+ * Generates a new world map and description using the AI.
+ * @param session The current chat session.
+ */
+async function generateWorld(session: ChatSession) {
+    showWorldGenOverlay();
+    try {
+        const themes = `Tone: ${session.settings?.tone}, Narration: ${session.settings?.narration}`;
+        let charInfo = 'A new adventurer.';
+        if (typeof session.characterSheet === 'object' && session.characterSheet.name) {
+            charInfo = `${session.characterSheet.name}, the ${session.characterSheet.race} ${session.characterSheet.class}.`;
+        }
+
+        const prompt = getNewWorldGenerationPrompt(themes, charInfo);
+        const response = await ai.models.generateContent({
+            model: 'gemini-2.5-flash',
+            contents: prompt,
+            config: {
+                responseMimeType: "application/json",
+                responseSchema: worldGenerationSchema,
+            }
+        });
+
+        const worldData = JSON.parse(response.text);
+        session.worldData = worldData;
+        
+        // Add the world description to the chat
+        const worldDescMessage: Message = { sender: 'model', text: worldData.worldDescription };
+        session.messages.push(worldDescMessage);
+
+    } catch (error) {
+        console.error("World generation failed:", error);
+        // Create a fallback world so the game can still start
+        session.worldData = {
+            map: [
+                [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+                [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+                [1, 0, 1, 0, 2, 1, 1, 0, 0, 1],
+                [1, 0, 1, 0, 0, 0, 1, 0, 0, 1],
+                [1, 0, 1, 0, 0, 0, 1, 0, 0, 1],
+                [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+                [1, 0, 0, 0, 1, 1, 1, 1, 0, 1],
+                [1, 0, 0, 0, 0, 0, 0, 0, 0, 1],
+                [1, 0, 0, 1, 0, 0, 0, 0, 0, 1],
+                [1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            ],
+            playerStart: { x: 5.5, y: 5.5 },
+            worldDescription: "The Chronicler's vision faltered, but a small, stone room materializes around you from the ether. The air is still and silent."
+        };
+        const errorMessage: Message = { sender: 'error', text: "The world failed to generate correctly. A default starting area has been created." };
+        session.messages.push(errorMessage);
+    } finally {
+        hideWorldGenOverlay();
+    }
+}
+
+/**
  * A helper function to finalize the setup phase and transition to the main game.
  * @param session The current chat session.
  * @param title The title for the new adventure.
@@ -429,13 +523,16 @@ async function finalizeSetupAndStartGame(session: ChatSession, title: string, fi
   session.title = title;
 
   if (finalSetupMessage) {
-    // The message is already in the DOM from the streaming function.
-    // We just need to ensure it's in the state.
     session.messages.push(finalSetupMessage);
   }
 
+  await generateWorld(session);
+
   saveChatHistoryToDB();
   renderChatHistory();
+
+  // The world description has been added by generateWorld, so we can render it now.
+  renderMessages(session.messages);
 
   const gameLoadingContainer = appendMessage({ sender: 'model', text: '' });
   const gameLoadingMessage = gameLoadingContainer.querySelector('.message') as HTMLElement;
@@ -478,6 +575,58 @@ async function finalizeSetupAndStartGame(session: ChatSession, title: string, fi
     gameLoadingContainer.remove();
     appendMessage({ sender: 'error', text: "The world failed to materialize. Please try starting a new game." });
   }
+}
+
+/**
+ * Sends telemetry data to the specialized telemetry chat session and streams the response.
+ * @param telemetry The string of telemetry data to send.
+ */
+async function handleTelemetry(telemetry: string) {
+    if (!telemetryChat || isSending()) {
+        return;
+    }
+    setSending(true);
+
+    try {
+        const result = await telemetryChat.sendMessageStream({ message: telemetry });
+        let responseText = '';
+        let telemetryMessageContainer: HTMLElement | null = null;
+        let messageEl: HTMLElement | null = null;
+        const shouldScroll = chatContainer.scrollHeight - chatContainer.clientHeight <= chatContainer.scrollTop + 10;
+
+        for await (const chunk of result) {
+            responseText += chunk.text || '';
+            if (responseText.trim()) {
+                if (!telemetryMessageContainer) {
+                    telemetryMessageContainer = appendMessage({ sender: 'model', text: '' });
+                    messageEl = telemetryMessageContainer.querySelector('.message') as HTMLElement;
+                }
+                if (messageEl) {
+                    messageEl.innerHTML = responseText;
+                    if (shouldScroll) {
+                        chatContainer.scrollTop = chatContainer.scrollHeight;
+                    }
+                }
+            }
+        }
+
+        if (responseText.trim()) {
+            const currentSession = getCurrentChat();
+            if (currentSession && telemetryMessageContainer) {
+                const finalMessage: Message = { sender: 'model', text: responseText };
+                currentSession.messages.push(finalMessage);
+                saveChatHistoryToDB();
+            } else if (telemetryMessageContainer) {
+                telemetryMessageContainer.remove();
+            }
+        } else if (telemetryMessageContainer) {
+            telemetryMessageContainer.remove();
+        }
+    } catch (error) {
+        console.error("Telemetry Error:", error);
+    } finally {
+        setSending(false);
+    }
 }
 
 
@@ -820,7 +969,7 @@ function setupEventListeners() {
   
   chatForm.addEventListener('submit', handleFormSubmit);
   // Fix: Cannot find name 'sendButton'.
-  sendButton.addEventListener('click', handleFormSubmit);
+  sendButton.addEventListener('click', (e) => handleFormSubmit(e));
 
   chatInput.addEventListener('focus', () => {
     setTimeout(() => {
@@ -1158,6 +1307,11 @@ function setupEventListeners() {
 
   fileUploadBtn.addEventListener('click', () => fileUploadInput.click());
   fileUploadInput.addEventListener('change', handleFileUpload);
+
+  enterDungeonDelverBtn.addEventListener('click', () => openModal(worldCreationView));
+  cancelWorldCreationBtn.addEventListener('click', () => closeModal(worldCreationView));
+  worldCreationForm.addEventListener('submit', handleWorldCreationSubmit);
+  setupEngineListeners();
 }
 
 /**
@@ -1206,6 +1360,284 @@ async function initApp() {
 
   setupEventListeners();
   showWelcomeModalIfNeeded();
+}
+
+// --- GAME ENGINE ---
+
+/**
+ * Handles the submission of the new Dungeon Delver character creation form.
+ */
+async function handleWorldCreationSubmit(e: Event) {
+    e.preventDefault();
+    const form = e.target as HTMLFormElement;
+    const formData = new FormData(form);
+    const name = (form.querySelector('#char-name-input') as HTMLInputElement).value.trim();
+    const race = (form.querySelector('#char-race-input') as HTMLInputElement).value.trim();
+    const charClass = (form.querySelector('#char-class-input') as HTMLInputElement).value.trim();
+
+    if (!name || !race || !charClass) {
+        // Basic validation, though `required` attribute should handle this.
+        return;
+    }
+    
+    closeModal(worldCreationView);
+    form.reset();
+
+    await startDungeonDelverMode({ name, race, class: charClass });
+}
+
+/**
+ * Initiates the Dungeon Delver mode: creates a new session, generates a world,
+ * loads it, and activates the 3D engine view.
+ * @param charDetails The basic character details from the creation form.
+ */
+async function startDungeonDelverMode(charDetails: { name: string; race: string; class: string }) {
+    showWorldGenOverlay();
+    
+    // Create a hidden user message to start the history, ensuring it's valid.
+    const kickoffMessage: Message = {
+        sender: 'user',
+        text: `Begin a new dungeon delve for my character: ${charDetails.name}, the ${charDetails.race} ${charDetails.class}.`,
+        hidden: true,
+    };
+
+    const newId = `chat-${Date.now()}`;
+    const newSession: ChatSession = {
+      id: newId,
+      title: `${charDetails.name}'s Dungeon Delve`,
+      messages: [kickoffMessage],
+      isPinned: false,
+      createdAt: Date.now(),
+      personaId: 'purist', // Default for this mode
+      characterSheet: {
+          name: charDetails.name,
+          race: charDetails.race,
+          class: charDetails.class,
+          level: 1,
+          abilityScores: { STR: {score:10, modifier:"+0"}, DEX: {score:10, modifier:"+0"}, CON: {score:10, modifier:"+0"}, INT: {score:10, modifier:"+0"}, WIS: {score:10, modifier:"+0"}, CHA: {score:10, modifier:"+0"} },
+          armorClass: 10,
+          hitPoints: { current: 10, max: 10 },
+          speed: "30ft",
+          skills: [],
+          featuresAndTraits: []
+      },
+      settings: {
+        tone: 'gritty',
+        narration: 'descriptive',
+      },
+    };
+
+    // Initialize the dedicated telemetry chat
+    const telemetryInstruction = getTelemetryInstruction();
+    telemetryChat = createNewChatInstance([], telemetryInstruction);
+
+    getChatHistory().push(newSession);
+    
+    await generateWorld(newSession);
+    
+    saveChatHistoryToDB();
+    renderChatHistory();
+    loadChat(newId);
+    
+    handleEngineToggle();
+
+    hideWorldGenOverlay();
+}
+
+
+function handleEngineToggle() {
+    const currentSession = getCurrentChat();
+    if (!currentSession?.worldData) {
+        console.error("Attempted to enter world view without world data.");
+        return;
+    }
+
+    engineActive = !engineActive;
+    document.body.classList.toggle('engine-active', engineActive);
+
+    if (engineActive) {
+        // Load the map and player position from the session
+        gameMap = currentSession.worldData.map;
+        player.x = currentSession.worldData.playerStart.x;
+        player.y = currentSession.worldData.playerStart.y;
+        player.dir = 0; // Reset direction
+
+        if (!gameLoopId) {
+            gameLoop();
+        }
+    } else {
+        if (gameLoopId) {
+            cancelAnimationFrame(gameLoopId);
+            gameLoopId = null;
+        }
+        if (telemetryChat) {
+            telemetryChat = null;
+        }
+    }
+}
+
+function setupEngineListeners() {
+    document.addEventListener('keydown', (e) => {
+        if (keys.hasOwnProperty(e.key)) {
+            e.preventDefault();
+            keys[e.key] = true;
+        }
+    });
+    document.addEventListener('keyup', (e) => {
+        if (keys.hasOwnProperty(e.key)) {
+            e.preventDefault();
+            keys[e.key] = false;
+        }
+    });
+}
+
+function getDirectionString(rad: number): string {
+    rad = (rad % (2 * Math.PI) + 2 * Math.PI) % (2 * Math.PI);
+    if (rad >= 7 * Math.PI / 4 || rad < Math.PI / 4) return "NORTH";
+    if (rad >= Math.PI / 4 && rad < 3 * Math.PI / 4) return "EAST";
+    if (rad >= 3 * Math.PI / 4 && rad < 5 * Math.PI / 4) return "SOUTH";
+    return "WEST";
+}
+
+function getTerrainType(x: number, y: number): string {
+    const mapX = Math.floor(x);
+    const mapY = Math.floor(y);
+    if (mapY < 0 || mapY >= gameMap.length || mapX < 0 || mapX >= gameMap[0].length) {
+        return "VOID";
+    }
+    const tile = gameMap[mapY][mapX];
+    switch (tile) {
+        case 1: return "STONE_WALL";
+        case 2: return "DOOR";
+        default: return "STONE_FLOOR";
+    }
+}
+
+function gameLoop() {
+    // --- Movement ---
+    const moveSpeed = 0.05;
+    const rotSpeed = 0.04;
+    const oldX = player.x;
+    const oldY = player.y;
+
+    if (keys.ArrowUp) {
+        player.x += Math.cos(player.dir) * moveSpeed;
+        player.y += Math.sin(player.dir) * moveSpeed;
+    }
+    if (keys.ArrowDown) {
+        player.x -= Math.cos(player.dir) * moveSpeed;
+        player.y -= Math.sin(player.dir) * moveSpeed;
+    }
+    if (keys.ArrowRight) {
+        player.dir += rotSpeed;
+    }
+    if (keys.ArrowLeft) {
+        player.dir -= rotSpeed;
+    }
+
+    // --- Collision ---
+    if (gameMap[Math.floor(player.y)][Math.floor(player.x)] === 1) { // Only collide with walls
+        player.x = oldX;
+        player.y = oldY;
+    }
+
+    // --- Telemetry ---
+    const positionChanged = Math.floor(player.x) !== Math.floor(oldX) || Math.floor(player.y) !== Math.floor(oldY);
+    // A simple way to check for significant rotation without spamming on every tiny change
+    const significantRotation = Math.abs(player.dir - player.rot) > 0.5; // about 30 degrees
+
+    if ((positionChanged || significantRotation) && !isSending()) {
+        player.rot = player.dir; // Update the last known rotation
+        
+        const directionStr = getDirectionString(player.dir);
+        const terrainStr = getTerrainType(player.x, player.y);
+        
+        const telemetry = `[MOVE EVENT: { from: {x: ${Math.floor(oldX)}, y: ${Math.floor(oldY)}}, to: {x: ${Math.floor(player.x)}, y: ${Math.floor(player.y)}}, direction: "${directionStr}", terrain: "${terrainStr}" }]`;
+        
+        handleTelemetry(telemetry);
+    }
+
+
+    // --- Drawing ---
+    const ctx = gameViewport.getContext('2d');
+    if (!ctx) return;
+
+    const W = gameViewport.width = window.innerWidth;
+    const H = gameViewport.height = window.innerHeight / 2;
+    
+    // Ceiling and Floor with more distinct colors for better depth perception.
+    ctx.fillStyle = '#2a2a3a'; // Dark, moody blue/grey ceiling
+    ctx.fillRect(0, 0, W, H / 2);
+    ctx.fillStyle = '#5a4a3a'; // Brownish/earthy floor
+    ctx.fillRect(0, H/2, W, H / 2);
+
+    const FOV = Math.PI / 3;
+    const FOG_COLOR = { r: 42, g: 42, b: 58 }; // Corresponds to ceiling color #2a2a3a
+    
+    for (let i = 0; i < W; i++) {
+        const rayAngle = (player.dir - FOV / 2) + (i / W) * FOV;
+        
+        let distanceToWall = 0;
+        let hitWall = false;
+        let wallType = 0;
+        let side = 0; // 0 for N/S walls, 1 for E/W walls
+
+        const eyeX = Math.cos(rayAngle);
+        const eyeY = Math.sin(rayAngle);
+
+        while (!hitWall && distanceToWall < 20) {
+            distanceToWall += 0.1;
+            const testX = Math.floor(player.x + eyeX * distanceToWall);
+            const testY = Math.floor(player.y + eyeY * distanceToWall);
+
+            if (testX < 0 || testX >= gameMap[0].length || testY < 0 || testY >= gameMap.length) {
+                hitWall = true;
+                distanceToWall = 20;
+            } else {
+                const mapTile = gameMap[testY][testX];
+                if (mapTile !== 0) {
+                    hitWall = true;
+                    wallType = mapTile;
+                    
+                    // Side detection: check if the ray just crossed a vertical or horizontal grid line.
+                    const prevX = Math.floor(player.x + eyeX * (distanceToWall - 0.1));
+                    if (testX !== prevX) {
+                        side = 1; // E/W wall
+                    } else {
+                        side = 0; // N/S wall
+                    }
+                }
+            }
+        }
+        
+        // Correct for fisheye lens effect to make walls appear straight.
+        const ca = player.dir - rayAngle;
+        distanceToWall *= Math.cos(ca);
+
+        const ceiling = H / 2 - H / distanceToWall;
+        const floor = H - ceiling;
+        
+        // Define base colors and apply different shades for N/S vs E/W walls for a pseudo-lighting effect.
+        let wallColorRgb;
+        if (wallType === 2) { // Door
+            wallColorRgb = side === 1 ? { r: 110, g: 53, b: 13 } : { r: 139, g: 69, b: 19 }; // Darker brown vs original #8B4513
+        } else { // Wall
+            wallColorRgb = side === 1 ? { r: 128, g: 128, b: 128 } : { r: 160, g: 160, b: 160 }; // #808080 (darker) vs #a0a0a0 (lighter)
+        }
+        
+        // Calculate fog factor. Starts after 1 unit, maxes out at 12 units.
+        const fogFactor = Math.max(0, Math.min(1, (distanceToWall - 1) / 11));
+
+        // Apply fog by interpolating between wall color and the ceiling color.
+        const r = wallColorRgb.r * (1 - fogFactor) + FOG_COLOR.r * fogFactor;
+        const g = wallColorRgb.g * (1 - fogFactor) + FOG_COLOR.g * fogFactor;
+        const b = wallColorRgb.b * (1 - fogFactor) + FOG_COLOR.b * fogFactor;
+
+        ctx.fillStyle = `rgb(${Math.floor(r)}, ${Math.floor(g)}, ${Math.floor(b)})`;
+        ctx.fillRect(i, ceiling, 1, floor - ceiling);
+    }
+    
+    gameLoopId = requestAnimationFrame(gameLoop);
 }
 
 // Start the application

@@ -2,7 +2,7 @@
  * @license
  * SPDX-License-Identifier: Apache-2.0
  */
-import type { ChatSession, GameSettings, Message, CharacterSheetData, Achievement, NPCState } from './types';
+import type { ChatSession, GameSettings, Message, CharacterSheetData, Achievement, NPCState, WorldData } from './types';
 
 /**
  * Takes any object and safely migrates it into a valid ChatSession object.
@@ -31,19 +31,6 @@ export function migrateAndValidateSession(session: any): ChatSession {
 
   newSession.adminPassword = typeof session.adminPassword === 'string' ? session.adminPassword : undefined;
   newSession.personaId = typeof session.personaId === 'string' ? session.personaId : 'purist';
-
-  if (
-    session.creationPhase === 'guided' ||
-    session.creationPhase === 'character_creation' ||
-    session.creationPhase === 'narrator_selection' ||
-    session.creationPhase === 'world_creation' ||
-    session.creationPhase === 'quick_start_selection' ||
-    session.creationPhase === 'quick_start_password'
-    ) {
-    newSession.creationPhase = session.creationPhase;
-  } else {
-    newSession.creationPhase = false;
-  }
 
   if (typeof session.characterSheet === 'object' && session.characterSheet !== null) {
     newSession.characterSheet = session.characterSheet as CharacterSheetData;
@@ -90,10 +77,28 @@ export function migrateAndValidateSession(session: any): ChatSession {
     newSession.settings = defaultSettings;
   }
 
-  if (Array.isArray(session.quickStartChars)) {
-    newSession.quickStartChars = session.quickStartChars as CharacterSheetData[];
+  // Validate worldData
+  if (typeof session.worldData === 'object' && session.worldData !== null &&
+      Array.isArray(session.worldData.map) &&
+      typeof session.worldData.playerStart === 'object' &&
+      typeof session.worldData.worldDescription === 'string') {
+    newSession.worldData = session.worldData as WorldData;
   } else {
-    newSession.quickStartChars = undefined;
+    newSession.worldData = undefined;
+  }
+
+  // Fix: Add migration for new properties from game setup flow.
+  const validPhases = ['guided', 'character_creation', 'narrator_selection', 'world_creation', 'quick_start_selection', 'quick_start_password'];
+  if ((typeof session.creationPhase === 'string' && validPhases.includes(session.creationPhase)) || session.creationPhase === false) {
+      newSession.creationPhase = session.creationPhase;
+  } else {
+      newSession.creationPhase = undefined;
+  }
+
+  if (Array.isArray(session.quickStartChars)) {
+      newSession.quickStartChars = session.quickStartChars;
+  } else {
+      newSession.quickStartChars = undefined;
   }
 
   return newSession as ChatSession;

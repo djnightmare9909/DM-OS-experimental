@@ -65,6 +65,12 @@ export interface NPCState {
     relationship: string;
 }
 
+export interface WorldData {
+  map: number[][];
+  playerStart: { x: number; y: number };
+  worldDescription: string;
+}
+
 export interface ChatSession {
   id: string;
   title: string;
@@ -73,7 +79,6 @@ export interface ChatSession {
   createdAt: number;
   adminPassword?: string;
   personaId?: string;
-  creationPhase?: 'guided' | 'character_creation' | 'narrator_selection' | 'world_creation' | 'quick_start_selection' | 'quick_start_password' | false;
   characterSheet?: CharacterSheetData | string;
   inventory?: string;
   characterImageUrl?: string;
@@ -81,6 +86,9 @@ export interface ChatSession {
   npcList?: NPCState[];
   achievements?: Achievement[];
   settings?: GameSettings;
+  worldData?: WorldData;
+  // Fix: Add missing properties to support game setup flow.
+  creationPhase?: 'guided' | 'character_creation' | 'narrator_selection' | 'world_creation' | 'quick_start_selection' | 'quick_start_password' | false;
   quickStartChars?: CharacterSheetData[];
 }
 

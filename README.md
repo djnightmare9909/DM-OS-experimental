@@ -14,13 +14,16 @@ At the heart of DM OS is a silent, internal process called **The Chronicler**. T
 *   **Progress Clocks:** Long-term events, like an impending invasion or a spreading plague, are tracked on conceptual timers. Your actions—or inactions—can advance or halt these clocks, dynamically shaping the world's future.
 *   **Reactive Environments:** The world remembers. A goblin patrol you eliminate won't just disappear; their war camp will be on high alert when you arrive. News of your deeds, good or ill, will spread, changing how different communities react to you.
 
-### 2. Deeply Simulated NPCs with Persistent Memory
+### 2. Procedurally Generated Worlds
+Before your adventure begins, the AI Chronicler procedurally generates a unique world map for you to explore, complete with rooms, corridors, and features based on your chosen themes. Experience the thrill of entering a world built just for your story, and visualize it in the 3D "World View."
+
+### 3. Deeply Simulated NPCs with Persistent Memory
 NPCs in DM OS are more than just quest-givers; they are simulated people with unique histories, beliefs, and memories.
 
 *   **Narrative DNA:** Every significant NPC is generated with a "Cornerstone Event" from their past that has shaped their worldview, created behavioral scars, and defined their core motivations.
 *   **Stateful Interaction Log:** NPCs remember every significant interaction they have with you. Earning an NPC's trust or making a lifelong enemy has tangible, long-term consequences that will shape your story. Their disposition towards you evolves based on your actions, not a predefined script.
 
-### 3. Unprecedented Player Agency: The OOC Protocol
+### 4. Unprecedented Player Agency: The OOC Protocol
 The Out-of-Character (OOC) protocol is your ultimate tool for co-directing the game. It allows you to speak directly to the underlying AI, temporarily bypassing the Dungeon Master persona to manually change any aspect of the game world, plot, or characters.
 
 *   **Authenticated Control:** Using a session-specific password, you can issue direct commands to:
@@ -29,7 +32,7 @@ The Out-of-Character (OOC) protocol is your ultimate tool for co-directing the g
     *   Retroactively alter plot points ("retconning").
     *   Manually guide the story in a new direction.
 
-### 4. Multiple, Distinct DM Personas
+### 5. Multiple, Distinct DM Personas
 Tailor your D&D experience by choosing from one of four distinct Dungeon Master personalities at the start of your campaign:
 
 *   **The Purist (Tactician):** A traditional, rules-as-written referee for a challenging, tactical experience.
@@ -37,7 +40,7 @@ Tailor your D&D experience by choosing from one of four distinct Dungeon Master 
 *   **The Romantic Storyteller (Bard):** For mature stories focusing on deep relationships, passion, and intimacy.
 *   **The Hack & Slash (Gladiator):** A fast-paced, action-oriented game focused on combat and loot.
 
-### 5. Comprehensive & Automated Logbook
+### 6. Comprehensive & Automated Logbook
 Your adventure is automatically chronicled in a detailed in-game logbook, which you can ask the DM to update at any time based on the events of your campaign. It includes:
 
 *   **Character Sheet:** A complete, auto-generated D&D 5e character sheet.
@@ -45,7 +48,7 @@ Your adventure is automatically chronicled in a detailed in-game logbook, which 
 *   **Dramatis Personae (NPCs):** A list of characters you've met, including their description and current relationship to you.
 *   **Achievements:** A unique list of achievements generated based on your specific actions and accomplishments.
 
-### 6. Advanced AI-Powered Tools
+### 7. Advanced AI-Powered Tools
 Leverage the power of generative AI to enrich your experience:
 
 *   **Character Portrait Generation:** Create a unique, high-quality portrait of your character based on their in-game description and equipment using Imagen.
@@ -53,7 +56,7 @@ Leverage the power of generative AI to enrich your experience:
 *   **On-Demand Summaries:** Instantly get updated summaries for your inventory, quests, and more without breaking the flow of the game.
 *   **Multimodal RAG Context:** Upload documents (including PDFs), images, audio, or video files. The AI will extract the relevant information and add it to its working context, allowing you to ground your adventure in your own custom content.
 
-### 7. Rich, Customizable User Interface
+### 8. Rich, Customizable User Interface
 DM OS features a polished and highly customizable interface designed for role-playing.
 
 *   **20+ UI Themes:** Personalize the look and feel of the app with themes ranging from High Fantasy and Sci-Fi to Cyberpunk and Pirate.

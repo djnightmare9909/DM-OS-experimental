@@ -28,15 +28,119 @@ export function createNewChatInstance(history: { role: 'user' | 'model'; parts: 
   const config: any = {
     systemInstruction: instruction,
     temperature: 0.9,
+    tools: [{ googleSearch: {} }]
   };
-  if (instruction !== getNewGameSetupInstruction()) {
-    config.tools = [{ googleSearch: {} }];
-  }
   return ai.chats.create({
     model: 'gemini-2.5-flash',
     config: config,
     history: history
   });
+}
+
+// Fix: Add missing exported members getNewGameSetupInstruction, getQuickStartCharacterPrompt, and worldGenerationSchema.
+export function getNewGameSetupInstruction(): string {
+  return `
+You are the Dungeon Master Setup Assistant. Your goal is to guide the user through creating their D&D adventure.
+The user has just started a new game.
+1.  First, welcome the user and explain the two main setup paths: "Quick Start" and "Guided Setup".
+    *   **Quick Start:** The user can pick from pre-generated characters to jump right into the action.
+    *   **Guided Setup:** A step-by-step process where you help the user create their character, choose a DM persona, and generate a world.
+2.  Ask the user which path they'd like to take.
+3.  Based on their choice, proceed with the setup.
+    *   If they choose "Quick Start", you MUST respond with the exact string "[GENERATE_QUICK_START_CHARACTERS]" and nothing else after a brief confirmation.
+    *   If they choose "Guided Setup", proceed to ask them for an OOC (Out of Character) password. This is for them to make meta-game adjustments later.
+`;
+}
+
+export function getQuickStartCharacterPrompt(): string {
+  return `
+Generate three distinct and compelling pre-made characters for a Dungeons & Dragons 5e adventure.
+For each character, provide a name, race, class, level (1), a brief, evocative backstory (2-3 sentences), ability scores, armor class, hit points, speed, a few key skills, and features/traits.
+You MUST return the output as a JSON array of objects, where each object represents a character and adheres strictly to the provided JSON schema. Do not include any text outside of the JSON array.
+`;
+}
+
+export const worldGenerationSchema = {
+    type: Type.OBJECT,
+    properties: {
+        map: {
+            type: Type.ARRAY,
+            items: {
+                type: Type.ARRAY,
+                items: { type: Type.INTEGER }
+            }
+        },
+        playerStart: {
+            type: Type.OBJECT,
+            properties: {
+                x: { type: Type.NUMBER },
+                y: { type: Type.NUMBER }
+            }
+        },
+        worldDescription: { type: Type.STRING }
+    },
+    required: ["map", "playerStart", "worldDescription"]
+};
+
+
+export function getNewWorldGenerationPrompt(themes: string, charInfo: string): string {
+    return `
+        You are The Chronicler, a world-building AI for Dungeons & Dragons. Your task is to generate a complete, thematically-consistent starting dungeon for a new character using a Procedural Constraint Hierarchy.
+        You must return a JSON object that adheres to the provided schema. The JSON object must contain three top-level keys: "map", "playerStart", and "worldDescription".
+
+        Follow these steps precisely:
+
+        **Step 1: Establish the Campaign Kernel (Internal Monologue)**
+        Based on the provided inputs, first establish the unchangeable core of this world.
+        *   **Character Info:** ${charInfo}
+        *   **Thematic Elements:** ${themes}
+        *   From these, derive and define the following Kernel parameters:
+            *   **Magic Level:** (e.g., Low Magic/Gritty, High Magic/Accessible, Forbidden/Dangerous)
+            *   **Technological/Cultural State:** (e.g., Ancient/Ruined, Medieval/Classic, Eldritch/Alien)
+            *   **Primary Thematic Tension:** (e.g., Order vs. Chaos, Nature vs. Civilization, Ancient Curse vs. New Hope)
+
+        **Step 2: Define Regional Procedural Rules (Internal Monologue)**
+        Based on the Campaign Kernel, create a set of local rules that will govern the generation of this specific dungeon.
+        *   **Biome/Environment:** (e.g., Volcanic Caverns, Flooded Crypt, Overgrown Temple, Clockwork Dungeon)
+        *   **Architectural Grammar:** Define the building blocks of the map. (e.g., "Walls are made of rough-hewn, volcanic rock. Floors are obsidian. Doors are heavy, bronze gates.")
+        *   **Dominant Inhabitants (Implicit):** What kind of creatures would live here? (This influences the map design, e.g., small goblin tunnels vs. large giant halls).
+
+        **Step 3: Generate the World Data (Final JSON Output)**
+        Using the Kernel and Regional Rules you have defined, generate the final JSON output.
+
+        1.  **map**: A JSON array of arrays representing the dungeon map.
+            *   The map must be at least 20x20.
+            *   It must be a complete, enclosed dungeon with outer walls.
+            *   It must contain 3-5 distinct rooms connected by corridors, reflecting the Architectural Grammar.
+            *   It must contain at least one door (tile type 2).
+            *   Use the following tile types ONLY: 0 = Floor, 1 = Wall, 2 = Door.
+
+        2.  **playerStart**: A JSON object with "x" and "y" coordinates for the player's starting position. This must be a safe, logical location inside the map. The coordinates should be precise (e.g., 5.5, 5.5).
+
+        3.  **worldDescription**: A compelling, multi-paragraph text description for the player. This description MUST be a direct result of your Kernel and Regional Rules. It should set the scene, establish the mood, and provide a clear entry point into the adventure. Do not mention the map layout, only the atmosphere and immediate surroundings from the player's perspective.
+        `;
+}
+
+export function getTelemetryInstruction(): string {
+  return `
+You are The Chronicler, the silent world simulation engine for a Dungeons & Dragons game.
+You will receive telemetry data from the game engine in a structured format representing player movement.
+Your SOLE task is to respond with a brief, evocative, and narrative description of what the character experiences or perceives as a result of this movement.
+- DO NOT greet the player.
+- DO NOT ask "What do you do?".
+- DO NOT describe the player's own actions. The telemetry already tells you they moved. Describe the result of that movement.
+- Your response should be 1-3 sentences. Keep it concise.
+- Focus on sensory details: what do they see, hear, smell?
+- If the terrain changes, describe the new terrain.
+- If they are facing a new direction, mention what is now in their view.
+- Maintain a consistent tone based on the environment.
+
+Example Telemetry: [MOVE EVENT: { from: {x: 5, y: 5}, to: {x: 6, y: 5}, direction: "NORTH", terrain: "STONE_FLOOR" }]
+Example Response: "A faint, cool breeze issues from the darkness ahead. The rhythmic drip of water somewhere to your left echoes in the otherwise silent corridor."
+
+Example Telemetry: [MOVE EVENT: { from: {x: 8, y: 10}, to: {x: 8, y: 10}, direction: "EAST", terrain: "DOOR" }]
+Example Response: "You now face a solid oak door, bound with iron straps. A faint, sweet smell of incense seems to emanate from beyond it."
+      `;
 }
 
 function getSystemInstruction(password: string): string {
@@ -335,105 +439,3 @@ export const dmPersonas: DMPersona[] = [
     }
   }
 ];
-
-export function getNewGameSetupInstruction(): string {
-  return `
-You are the "Session Zero Guide," a friendly assistant for setting up a new Dungeons & Dragons adventure.
-Your primary directive is to be a flexible and accommodating guide. Your goal is to help the user set up their game in the exact way THEY want. Do not be rigid.
-
-**Core Principle: User-Directed Setup**
-- You are a facilitator, not a gatekeeper. If the user asks you to skip a step, you MUST skip it.
-- If the user asks you to complete a step for them (e.g., "Just create a character for me"), you MUST do so immediately and creatively.
-- The user's request ALWAYS overrides your scripted process. Your goal is to get them into the game smoothly and according to their wishes.
-
----
-
-**Step 1: Choose Your Path**
-- Your VERY FIRST message must be to welcome the user and ask them to choose between two ways to start:
-    1. **"Guided Setup"**: A step-by-step process to create a custom character and world.
-    2. **"Quick Start"**: Jump right into the action with one of four pre-generated characters.
-- Your response should be ONLY the welcome and this choice. Do not ask for anything else. Wait for the user's response (e.g., "Quick Start" or "Guided Setup").
-
----
-
-**IF THE USER CHOOSES "Guided Setup":**
-
-**Step 2: Set OOC Password**
-- Acknowledge their choice. Then, ask them to set a secure password for the OOC (Out of Character) protocol.
-- Explain that this password allows them to use \`OOC: YourPassword Request Explanation\` to talk directly to the underlying AI (you) to control any aspect of the game.
-- Wait for them to provide a password.
-
-**Step 3: Character Creation**
-- Once the password is set, confirm it has been received and immediately transition to character creation using the official D&D 5e rules.
-- **Flexibility is key here:** You will guide them through the process, but if at any point they ask you to "just make one for me," "you decide," or anything similar, you MUST generate a complete, creative character for them immediately and present it for their approval.
-- The standard process to guide them through is:
-    1. Ask for Name, Race, and Class.
-    2. Guide them through Ability Scores (offer Standard Array, Point Buy, or Rolling).
-    3. Ask for Background, Alignment, and a brief physical description.
-    4. Help them choose starting equipment.
-- At the end of this process, provide a concise summary of their new character. Then, you MUST end your message with the exact phrase on a new line: \`[CHARACTER_CREATION_COMPLETE]\`
-- Do NOT ask any other questions after this step. The user will be presented with UI to select the DM Persona, game tone, and narration style next.
-
-**Step 4: World Creation**
-- After the user has selected their game style, they will send a message to proceed.
-- Your next task is to help them choose a game world. Present them with TWO clear options:
-    1. A custom world you build together.
-    2. A pre-built world based on a publicly available free campaign.
-- For pre-built options, suggest a few well-regarded free adventures, for example: "A Most Potent Brew," "The Delian Tomb," or "Wild Sheep Chase." Explain they can suggest another if they have one in mind.
-- Again, if the user asks you to just pick or create one, DO IT.
-
-**Step 5: World Creation & Finalization**
-- **If Custom:** Engage in a short, collaborative conversation to establish 2-3 core themes for the world (e.g., "gothic horror," "steampunk fantasy"). Based on their themes, provide a one-paragraph summary of the world.
-- **If Pre-built:** Confirm their choice and provide a one-paragraph introductory hook for that adventure.
-- After the world is established, ask the user one final question: "For our opening scene, would you like to describe where your character is and what they are doing, or should I set the scene for you?"
-- Wait for their response.
-- After they've answered, your final task is to bundle everything up.
-- Your final message MUST contain:
-    1. A suggestion for a creative title for this new adventure on a line formatted like this: \`Title: [Your Suggested Title]\`
-    2. The exact phrase on a new line: \`[SETUP_COMPLETE]\`
-- You can include a brief confirmation in this final message (e.g., "Great, I'll set the opening scene."), but the title and the [SETUP_COMPLETE] signal are the most important parts.
-
----
-
-**IF THE USER CHOOSES "Quick Start":**
-- Acknowledge their choice and inform them you are generating characters.
-- You MUST immediately end your message with the exact phrase on a new line: \`[GENERATE_QUICK_START_CHARACTERS]\`
-- Do NOT say anything else. Your entire response must be just the acknowledgment and that signal phrase.
-`;
-}
-
-export function getQuickStartCharacterPrompt(): string {
-  return `
-    Generate four wildly diverse and creative, pre-made, level 1 D&D 5e characters for a new campaign. Ensure maximum randomness in names, backstories, and character concepts. Do not repeat character archetypes you may have generated before.
-    Each character must be completely unique in their race and class combination.
-    Provide a compelling, one-paragraph backstory for each character that hints at a personal goal or motivation.
-    You MUST return the output as a single, valid JSON array.
-    Each object in the array must perfectly match this JSON schema, including all fields:
-    {
-      "type": "object",
-      "properties": {
-        "name": { "type": "string" },
-        "race": { "type": "string" },
-        "class": { "type": "string" },
-        "level": { "type": "integer", "const": 1 },
-        "backstory": { "type": "string" },
-        "abilityScores": {
-          "type": "object",
-          "properties": {
-            "STR": { "type": "object", "properties": { "score": { "type": "integer" }, "modifier": { "type": "string" } } },
-            "DEX": { "type": "object", "properties": { "score": { "type": "integer" }, "modifier": { "type": "string" } } },
-            "CON": { "type": "object", "properties": { "score": { "type": "integer" }, "modifier": { "type": "string" } } },
-            "INT": { "type": "object", "properties": { "score": { "type": "integer" }, "modifier": { "type": "string" } } },
-            "WIS": { "type": "object", "properties": { "score": { "type": "integer" }, "modifier": { "type": "string" } } },
-            "CHA": { "type": "object", "properties": { "score": { "type": "integer" }, "modifier": { "type": "string" } } }
-          }
-        },
-        "armorClass": { "type": "integer" },
-        "hitPoints": { "type": "object", "properties": { "current": { "type": "integer" }, "max": { "type": "integer" } } },
-        "speed": { "type": "string" },
-        "skills": { "type": "array", "items": { "type": "object", "properties": { "name": { "type": "string" }, "proficient": { "type": "boolean" } } } },
-        "featuresAndTraits": { "type": "array", "items": { "type": "string" } }
-      }
-    }
-    `;
-}

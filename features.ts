@@ -31,6 +31,7 @@ import {
   characterImageLoading,
   characterImageDisplay,
   inventoryPopupContent,
+  // Fix: Add diceResultsLog and diceTotalValue to imports
   diceResultsLog,
   diceTotalValue,
   diceGrid,
