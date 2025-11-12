@@ -1,0 +1,5 @@
+{
+  "name": "dm os experimental",
+  "description": "An AI Dungeon Master for Dungeons & Dragons, powered by Gemini.\nsome features are experimental and are not guaranteed to work",
+  "requestFramePermissions": []
+}
