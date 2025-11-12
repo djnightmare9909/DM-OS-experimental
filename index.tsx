@@ -644,6 +644,8 @@ async function handleFormSubmit(e: Event) {
     const userInput = chatInput.value.trim();
     const currentSession = getCurrentChat();
     if (!userInput || !currentSession) return;
+    
+    const isCombatInitiate = userInput.startsWith('[COMBAT_INITIATE:');
 
     const lowerCaseInput = userInput.toLowerCase().replace(/[?]/g, '');
 
@@ -812,9 +814,11 @@ async function handleFormSubmit(e: Event) {
         animationState = { type: 'player-attack', duration: 30 };
     }
 
-    const userMessage: Message = { sender: 'user', text: userInput };
+    const userMessage: Message = { sender: 'user', text: userInput, hidden: isCombatInitiate };
     currentSession.messages.push(userMessage);
-    appendMessage(userMessage);
+    if (!isCombatInitiate) {
+        appendMessage(userMessage);
+    }
     chatInput.value = '';
     chatInput.style.height = 'auto';
 
@@ -832,12 +836,33 @@ async function handleFormSubmit(e: Event) {
 
       const result = await geminiChat.sendMessageStream({ message: messageWithContext });
       let responseText = '';
+      let turnOrderParsed = false;
       modelMessageEl.classList.remove('loading');
       modelMessageEl.innerHTML = '';
 
       for await (const chunk of result) {
         responseText += chunk.text || '';
-        let displayHtml = responseText.replace(/\[COMBAT_STATUS:.*?\]/g, '').trim();
+        
+        if (!turnOrderParsed) {
+            const turnOrderRegex = /\[COMBAT_TURN_ORDER:\s*({.*?})\]/;
+            const turnOrderMatch = responseText.match(turnOrderRegex);
+            if (turnOrderMatch && turnOrderMatch[1]) {
+                try {
+                    const combatData = JSON.parse(turnOrderMatch[1]);
+                    if(combatData.order && combatData.round) {
+                        currentSession.combatState = {
+                            turnOrder: combatData.order,
+                            currentTurnIndex: 0,
+                            round: combatData.round
+                        };
+                        turnOrderParsed = true;
+                        saveChatHistoryToDB();
+                    }
+                } catch(e) { console.error("Failed to parse COMBAT_TURN_ORDER", e); }
+            }
+        }
+        
+        let displayHtml = responseText.replace(/\[COMBAT_.*?\]/g, '').trim();
         modelMessageEl.innerHTML = displayHtml;
         if (shouldScroll) {
           chatContainer.scrollTop = chatContainer.scrollHeight;
@@ -853,17 +878,14 @@ async function handleFormSubmit(e: Event) {
           combatData = JSON.parse(match[1]);
           updateCombatTracker(combatData.enemies);
           // If all enemies are defeated, end combat mode
-          if (combatData.enemies.length === 0) {
+          if (combatData.enemies.length === 0 && currentSession.inCombat) {
               currentSession.inCombat = false;
+              currentSession.combatState = undefined;
+              appendMessage({ sender: 'system', text: 'Combat has ended.' });
           }
         } catch (jsonError) {
           console.error("Failed to parse combat status JSON:", jsonError);
-          combatTracker.classList.add('hidden');
-          currentSession.inCombat = false;
         }
-      } else {
-        combatTracker.classList.add('hidden');
-        currentSession.inCombat = false;
       }
 
       if (userInput.toLowerCase().startsWith("i attack") && combatData?.enemies?.length > 0) {
@@ -871,7 +893,7 @@ async function handleFormSubmit(e: Event) {
       }
 
 
-      const finalMessage: Message = { sender: 'model', text: responseText.replace(combatStatusRegex, '').trim() };
+      const finalMessage: Message = { sender: 'model', text: responseText.replace(/\[COMBAT_.*?\]/g, '').trim() };
       currentSession.messages.push(finalMessage);
       saveChatHistoryToDB();
     } catch (error) {
@@ -1372,6 +1394,42 @@ async function initApp() {
 // --- GAME ENGINE ---
 
 /**
+ * Checks if there is a clear line of sight between two points on the map.
+ * @param x1 Start X coordinate.
+ * @param y1 Start Y coordinate.
+ * @param x2 End X coordinate.
+ * @param y2 End Y coordinate.
+ * @param map The game map grid.
+ * @returns True if there is a line of sight, false otherwise.
+ */
+function hasLineOfSight(x1: number, y1: number, x2: number, y2: number, map: number[][]): boolean {
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    const steps = Math.max(Math.abs(dx), Math.abs(dy)) * 20; // Use a higher multiplier for more accuracy
+    const xIncrement = dx / steps;
+    const yIncrement = dy / steps;
+
+    let x = x1 + xIncrement;
+    let y = y1 + yIncrement;
+
+    for (let i = 0; i < steps; i++) {
+        const mapX = Math.floor(x);
+        const mapY = Math.floor(y);
+
+        if (map[mapY]?.[mapX] === 1) { // Hit a wall
+             // Check if we're not at the very end point, as the target can be inside a wall tile technically
+             if (Math.floor(x) !== Math.floor(x2) || Math.floor(y) !== Math.floor(y2)) {
+                return false;
+             }
+        }
+        x += xIncrement;
+        y += yIncrement;
+    }
+    return true;
+}
+
+
+/**
  * Handles the submission of the new Dungeon Delver character creation form.
  */
 async function handleWorldCreationSubmit(e: Event) {
@@ -1535,26 +1593,29 @@ function setupEngineListeners() {
 
 function handleAttackKeyPress() {
     const session = getCurrentChat();
-    if (!session || !session.worldData || session.inCombat) return;
+    if (!session || !session.worldData || session.inCombat || isSending()) return;
 
     let closestEnemy: WorldEnemy | null = null;
-    let closestDist = 2; // Max attack distance
+    let closestDist = 1.5; // Max attack distance ~1.5 tiles for melee
 
     for (const enemy of session.worldData.enemies) {
         const dist = Math.sqrt((player.x - enemy.x)**2 + (player.y - enemy.y)**2);
         if (dist < closestDist) {
-            closestDist = dist;
-            closestEnemy = enemy;
+            if (hasLineOfSight(player.x, player.y, enemy.x, enemy.y, session.worldData.map)) {
+                closestDist = dist;
+                closestEnemy = enemy;
+            }
         }
     }
 
     if (closestEnemy) {
         session.inCombat = true;
-        // Remove enemy from world so it's no longer rendered
+        // Remove enemy from world so it's no longer rendered, DM will track it now
         session.worldData.enemies = session.worldData.enemies.filter(e => e.id !== closestEnemy!.id);
         
-        // Trigger combat in text console
-        chatInput.value = `I attack the ${closestEnemy.type}.`;
+        const characterName = (typeof session.characterSheet === 'object' && session.characterSheet.name) ? session.characterSheet.name : 'Player';
+        // Trigger combat in text console by sending a special command
+        chatInput.value = `[COMBAT_INITIATE: { "attacker": "${characterName}", "target": "${closestEnemy.type}", "distance": "${Math.floor(closestDist * 5)}ft", "surprise": "false" }]`;
         chatForm.requestSubmit();
     }
 }

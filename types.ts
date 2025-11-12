@@ -102,6 +102,11 @@ export interface ChatSession {
   settings?: GameSettings;
   worldData?: WorldData;
   inCombat?: boolean;
+  combatState?: {
+    turnOrder: string[];
+    currentTurnIndex: number;
+    round: number;
+  };
   creationPhase?: 'guided' | 'character_creation' | 'narrator_selection' | 'world_creation' | 'quick_start_selection' | 'quick_start_password' | false;
   quickStartChars?: CharacterSheetData[];
 }

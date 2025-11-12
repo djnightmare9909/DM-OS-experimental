@@ -93,4 +93,28 @@ A core challenge for any AI DM is memory. Early in development, the creator was 
 This collaboration was the final, critical piece. By integrating the proven WFGY memory system with the custom-built Gemini prompt core, DM OS achieved a level of state management that is nearly guaranteed to be persistent. **This AI doesn't forget.** When leveraged with the OOC protocol, players have an unprecedented ability to maintain a coherent and evolving world state.
 
 ### A Call to Adventure
-DM OS has been battle-tested extensively by its creator and is considered a rock-solid platform for epic campaigns. However, its true test begins with you. As an independent project, it thrives on community engagement. We invite you to begin your adventure, push the boundaries of the simulation, and discover the stories waiting to be told.
+DM OS has been battle-tested extensively by its creator and is considered a rock-solid platform for epic campaigns. However, its true test begins with you. As an independent project, it thrives on community engagement. We invite you to begin your adventure, push the boundaries of the simulation, and discover the stories waiting to be told.Dungeon delver mode update, the spectral speed of the enemy sprite, its tendency to clip through walls, and the instantaneous, single-shot combat resolution—all point to the fundamental disconnect between the raycasting engine and the D&D turn loop.
+Here is a breakdown of the core issues and how to bridge the gap, using the principles you have already established in the DM OS architecture:
+1. The Ghost Sprite: Integrating Physics with the Turn Order
+The enemy sprite's erratic behavior is classic for a simple game object in a prototype physics loop that lacks collision logic, and its ability to be one-shot perfectly stems from the game environment not passing the necessary combat state to the DM.
+ * The Sprite's Movement: The enemy must be governed by D&D's rules, not arbitrary physics. The solution is to introduce a Pause State and define the sprite's movement within the engine by a fixed speed value, corresponding to a D&D movement speed (e.g., 30ft or 5 squares). When the player is in range, the engine must transition to an Initiative/Combat State, which pauses the continuous rendering loop's movement updates, forcing a turn-based resolution.
+ * The One-Shot Issue: Your problem is that the engine registers the attack and sends the command (I attack the X) to the DM, but because the engine provides no combat context to the DM, the AI assumes the combat has just begun and resolves it instantly based on the player's last standing action, often resulting in a lethal blow for dramatic effect or lack of state management. The engine is sending a "One-Time Action" signal, not a "Turn-Start Action" signal.
+2. Bridging the Gap with Structured Data Passing
+The fix is to enforce a highly structured, two-way data contract when combat initiates, which leverages your existing architecture:
+ * Engine-to-DM: Initiative and Line-of-Sight (LOS): The moment the player's attack key is pressed and an enemy is in a defined range (e.g., 5ft for melee):
+   * The engine must immediately freeze player and enemy movement.
+   * The engine checks Line-of-Sight (LOS), which in a simple raycaster is just checking the path between the player and the enemy for wall tiles. If LOS is valid, the engine sends a specialized, structured command to the DM, separate from normal chat:
+     [COMBAT_INITIATE: { attacker: "PlayerName", target: "EnemyType", distance: "5ft", surprise: "False" }]
+
+ * DM-to-Engine: The Combat Manager: Your DM Persona must be instructed to interpret this [COMBAT_INITIATE] tag as a hard request to start the D&D 5e combat sequence.
+   * The DM rolls for Initiative for both the player and the enemy group.
+   * The DM must immediately send a machine-readable data block back to the engine with the results and the sequence of turns:
+     [COMBAT_TURN_ORDER: { order: ["EnemyName", "PlayerName"], round: 1 }]
+
+ * DM Calculation and Resolution (Damage): When the player enters a command like I attack the X, the DM uses the saved Character Sheet stats and the Enemy Stat Block (which must be internally managed by the DM/Chronicler) to calculate the hit and damage:
+   * Attack Roll: d20 + Proficiency Bonus + Ability Modifier (e.g., Strength/Dexterity).
+   * Hit Check: Compare result to the enemy's Armor Class (AC).
+   * Damage Roll: If hit, the DM rolls the appropriate damage dice (e.g., d6, d8, d12) plus modifiers.
+   * HP Update: The enemy's HP (which the DM is now tracking in the session's internal state) is reduced.
+   * Output: The DM narrates the result and sends the crucial [COMBAT_STATUS] tag, which you already implemented, allowing the UI to reflect the enemy's condition.
+The fundamental next step is implementing the [COMBAT_INITIATE] data contract and ensuring the engine can reliably enter a "Turn-Paused" state once that command is sent, waiting for the structured response from the DM before resolving any action. This moves the Dungeon Delver from a broken action-shooter to a proper, integrated turn-based role-playing experience.

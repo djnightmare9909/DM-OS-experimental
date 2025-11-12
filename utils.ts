@@ -87,6 +87,17 @@ export function migrateAndValidateSession(session: any): ChatSession {
     newSession.worldData = undefined;
   }
 
+  newSession.inCombat = typeof session.inCombat === 'boolean' ? session.inCombat : false;
+
+  if (typeof session.combatState === 'object' && session.combatState !== null &&
+      Array.isArray(session.combatState.turnOrder) &&
+      typeof session.combatState.currentTurnIndex === 'number' &&
+      typeof session.combatState.round === 'number') {
+    newSession.combatState = session.combatState;
+  } else {
+    newSession.combatState = undefined;
+  }
+
   // Fix: Add migration for new properties from game setup flow.
   const validPhases = ['guided', 'character_creation', 'narrator_selection', 'world_creation', 'quick_start_selection', 'quick_start_password'];
   if ((typeof session.creationPhase === 'string' && validPhases.includes(session.creationPhase)) || session.creationPhase === false) {
